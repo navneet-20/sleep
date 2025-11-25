@@ -197,6 +197,9 @@
                 autostart: false,
                 volume: -10 // Base volume for the player itself
             }).connect(gain);
+            
+            // NOTE: Removed the invalid source.on('error', ...) call that caused the TypeError.
+            // Error handling relies on the try...catch block in toggleSound.
 
             return { source, gain, dynamicMode: 'static', lfo: null };
         }
@@ -261,6 +264,12 @@
             const rampTime = 0.5; // Smooth ramp up/down time (Dynamic increase/decrease)
 
             if (soundObj.isPlaying) {
+                // Check if the source exists before trying to stop it
+                if (!soundObj.source) {
+                    console.warn(`Attempted to stop ${name}, but source is missing.`);
+                    return;
+                }
+
                 // Stop playback: Dynamic decrease
                 // Ramp the volume down to silence (-100dB)
                 soundObj.gain.volume.rampTo(Tone.dbToGain(-100), rampTime); 
@@ -280,15 +289,27 @@
 
             } else {
                 // Start playback
+                
+                // Check if the source object exists and loaded property is available
+                if (!soundObj.source) {
+                    button.innerHTML = `<span class="text-xl">❌</span>`;
+                    button.title = "Audio setup failed.";
+                    button.disabled = true;
+                    return; 
+                }
+
                 if (!soundObj.source.loaded) {
                     button.innerHTML = `<span class="text-sm animate-pulse">... Loading</span>`;
                     button.disabled = true;
 
                     try {
+                        // Attempt to load the file
                         await soundObj.source.load(soundObj.path);
                     } catch (error) {
+                        // If loading fails (e.g., 404), display an error and exit
                         console.error(`Error loading file for ${name}:`, error);
                         button.innerHTML = `<span class="text-xl">⚠️</span>`;
+                        button.classList.add('bg-red-700');
                         button.disabled = false;
                         return;
                     }
