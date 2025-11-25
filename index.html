@@ -135,13 +135,14 @@
         // --- Tone.js and Application Logic ---
 
         // List of sounds with relative paths to the 'assets' folder
+        // NOTE: These paths assume you have an 'assets' folder next to index.html with these mp3 files.
         const sounds = [
             { name: "Rain", icon: "🌧️", path: "./assets/rain.mp3" },
             { name: "Wind", icon: "🌬️", path: "./assets/wind.mp3" },
             { name: "Storm", icon: "⛈️", path: "./assets/storm.mp3" },
-            { name: "Fireplace", icon: "🔥", path: "./assets/fireplace.mp3" }, // Added
-            { name: "Birds", icon: "🐦", path: "./assets/birds.mp3" },         // Added
-            { name: "Universe", icon: "🌌", path: "./assets/universe.mp3" },   // Added
+            { name: "Fireplace", icon: "🔥", path: "./assets/fireplace.mp3" }, 
+            { name: "Birds", icon: "🐦", path: "./assets/birds.mp3" },         
+            { name: "Universe", icon: "🌌", path: "./assets/universe.mp3" },   
             { name: "Train", icon: "🚂", path: "./assets/train.mp3" },
             { name: "Bus", icon: "🚌", path: "./assets/bus.mp3" },
             { name: "Car", icon: "🚗", path: "./assets/car.mp3" },
@@ -185,18 +186,19 @@
          */
         function createToneSource(sound) {
             // Create a general gain node for volume control (sends output to device speakers)
-            const gain = new Tone.Gain(Tone.dbToGain(-100)).toDestination(); // Start silent
+            // Initial volume is set very low (-100 dB) so it's silent until activated.
+            const gain = new Tone.Gain(Tone.dbToGain(-100)).toDestination(); 
             gain.nodeName = `${sound.name}Gain`;
 
             // Tone.Player is used for loading and looping audio files
             const source = new Tone.Player({
                 url: sound.path, 
-                loop: true,
+                loop: true, // Essential for repeating short sounds
                 autostart: false,
-                volume: -10 // Base volume for the player
+                volume: -10 // Base volume for the player itself
             }).connect(gain);
 
-            return { source, gain };
+            return { source, gain, dynamicMode: 'static', lfo: null };
         }
 
         /**
@@ -207,65 +209,112 @@
             // Logarithmic curve: -60dB (1) to 0dB (100)
             return Math.min(0, Math.max(-60, Math.log10(value / 100) * 20));
         }
+        
+        /**
+         * Applies the selected dynamic volume mode to the sound.
+         */
+        function updateSoundDynamics(name, mode) {
+            const soundObj = activeSources[name];
+            const gain = soundObj.gain;
+            const volumeSlider = document.getElementById(`vol-${name}`);
+            const currentSliderValue = parseInt(volumeSlider.value);
+            const currentDb = sliderToDb(currentSliderValue);
+
+            // 1. Clean up any existing LFO
+            if (soundObj.lfo) {
+                soundObj.lfo.stop();
+                soundObj.lfo.dispose(); // Clean up LFO
+                soundObj.lfo = null;
+            }
+            
+            soundObj.dynamicMode = mode;
+
+            if (mode === 'slowUpAndDown') {
+                // Modulate the volume slowly around the user's setting
+                const modulationDepth = 6; // Volume will swing by +/- 6dB peak-to-peak
+                // LFO frequency is very slow (0.05 Hz = 20 second cycle)
+                const lfo = new Tone.LFO(0.05, currentDb - modulationDepth / 2, currentDb + modulationDepth / 2).start();
+                lfo.nodeName = `${name}LFO`;
+
+                // Connect LFO output to the gain's volume parameter
+                lfo.connect(gain.volume);
+                soundObj.lfo = lfo;
+
+            } else {
+                // If switching to static, ensure the gain volume is set instantly to the slider value
+                gain.volume.value = currentDb; 
+            }
+        }
 
         /**
          * Handles the click event for the play/pause button.
          */
         async function toggleSound(name, button, card) {
             if (!isToneStarted) {
-                // Attempt to start audio context if not already started
                 await startAudioContext();
-                if (!isToneStarted) return; // Stop if it still failed to start
+                if (!isToneStarted) return; 
             }
 
             const soundObj = activeSources[name];
+            const volumeSlider = document.getElementById(`vol-${name}`);
+            const currentDb = sliderToDb(parseInt(volumeSlider.value));
+            const rampTime = 0.5; // Smooth ramp up/down time (Dynamic increase/decrease)
 
             if (soundObj.isPlaying) {
-                // Stop playback
-                soundObj.source.stop(Tone.now());
+                // Stop playback: Dynamic decrease
+                // Ramp the volume down to silence (-100dB)
+                soundObj.gain.volume.rampTo(Tone.dbToGain(-100), rampTime); 
+                
+                // Stop source slightly after volume ramp starts (0.1s later)
+                Tone.Transport.scheduleOnce(() => {
+                    soundObj.source.stop(Tone.now());
+                    // Stop LFO if it's active
+                    if(soundObj.lfo) soundObj.lfo.stop();
+                }, Tone.now() + 0.1); 
+
                 soundObj.isPlaying = false;
                 button.classList.remove('bg-sky-600', 'hover:bg-sky-500');
                 button.classList.add('bg-gray-700', 'hover:bg-gray-600');
                 card.classList.remove('is-playing');
                 button.innerHTML = `<span class="text-xl">▶️</span>`;
+
             } else {
                 // Start playback
-                // The sound must be loaded before starting.
-                if (soundObj.source.loaded) {
-                    // Start from the current time
-                    soundObj.source.start(Tone.now());
-                    soundObj.isPlaying = true;
-                    button.classList.remove('bg-gray-700', 'hover:bg-gray-600');
-                    button.classList.add('bg-sky-600', 'hover:bg-sky-500');
-                    card.classList.add('is-playing');
-                    button.innerHTML = `<span class="text-xl">⏸️</span>`;
-                } else {
-                    // Display loading indicator
+                if (!soundObj.source.loaded) {
                     button.innerHTML = `<span class="text-sm animate-pulse">... Loading</span>`;
                     button.disabled = true;
 
                     try {
-                        // Load the file, then start it
                         await soundObj.source.load(soundObj.path);
-                        
-                        // Start only if user hasn't cancelled the action while loading
-                        if (!soundObj.isPlaying) {
-                            soundObj.source.start(Tone.now());
-                            soundObj.isPlaying = true;
-                            button.classList.remove('bg-gray-700', 'hover:bg-gray-600');
-                            button.classList.add('bg-sky-600', 'hover:bg-sky-500');
-                            card.classList.add('is-playing');
-                            button.innerHTML = `<span class="text-xl">⏸️</span>`;
-                        } else {
-                            button.innerHTML = `<span class="text-xl">⏸️</span>`;
-                        }
                     } catch (error) {
                         console.error(`Error loading file for ${name}:`, error);
-                        // Use a simple error message on the button
                         button.innerHTML = `<span class="text-xl">⚠️</span>`;
+                        button.disabled = false;
+                        return;
                     }
-                    button.disabled = false;
                 }
+                
+                // Start source immediately
+                soundObj.source.start(Tone.now());
+                soundObj.isPlaying = true;
+                
+                // Dynamic increase (ramp up volume to the current slider setting)
+                if (soundObj.dynamicMode === 'slowUpAndDown') {
+                    // Start ramp to the intended mid-point
+                    soundObj.gain.volume.rampTo(currentDb, rampTime);
+                    // Then activate the LFO modulation (calls updateSoundDynamics to create/start the LFO)
+                    updateSoundDynamics(name, 'slowUpAndDown'); 
+                } else {
+                     // Static mode: ramp to the target dB value
+                     soundObj.gain.volume.rampTo(currentDb, rampTime);
+                }
+
+
+                button.classList.remove('bg-gray-700', 'hover:bg-gray-600');
+                button.classList.add('bg-sky-600', 'hover:bg-sky-500');
+                card.classList.add('is-playing');
+                button.innerHTML = `<span class="text-xl">⏸️</span>`;
+                button.disabled = false;
             }
         }
 
@@ -275,8 +324,16 @@
         function handleVolumeChange(name, value) {
             const soundObj = activeSources[name];
             const dbValue = sliderToDb(value);
-            // Set the volume of the associated Gain node
-            soundObj.gain.volume.value = dbValue;
+            
+            // If the sound is modulating, the user slider should change the LFO's min/max volume.
+            if (soundObj.dynamicMode === 'slowUpAndDown' && soundObj.lfo) {
+                const modulationDepth = 6; 
+                soundObj.lfo.max = dbValue + modulationDepth / 2;
+                soundObj.lfo.min = dbValue - modulationDepth / 2;
+            } else {
+                // Static mode: Apply instantaneous change 
+                soundObj.gain.volume.value = dbValue;
+            }
         }
 
         /**
@@ -288,10 +345,20 @@
 
             // Card content structure
             card.innerHTML = `
-                <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center justify-between mb-2">
                     <span class="text-5xl">${sound.icon}</span>
                     <h2 class="text-xl font-semibold">${sound.name}</h2>
                 </div>
+                
+                <!-- Dynamics Control -->
+                <div class="mb-4">
+                    <label for="dyn-${sound.name}" class="block text-sm font-medium text-gray-400">Volume Dynamics:</label>
+                    <select id="dyn-${sound.name}" class="w-full text-sm bg-gray-700 p-2 rounded-md border border-gray-600 text-gray-200 focus:ring-sky-500 focus:border-sky-500">
+                        <option value="static">Static (Constant)</option>
+                        <option value="slowUpAndDown">Slow Up/Down (Breathing)</option>
+                    </select>
+                </div>
+
                 <div class="flex items-center space-x-3 mt-auto">
                     <!-- Play/Pause Button -->
                     <button id="btn-${sound.name}" class="sound-button w-12 h-12 flex-shrink-0 flex items-center justify-center rounded-full bg-gray-700 text-white transition duration-200 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-opacity-50">
@@ -304,13 +371,16 @@
 
             // --- Connect JavaScript Logic ---
             const { source, gain } = createToneSource(sound);
-            activeSources[sound.name] = { source, gain, isPlaying: false, path: sound.path };
+            // Store new properties for dynamic control: dynamicMode and lfo
+            activeSources[sound.name] = { source, gain, isPlaying: false, path: sound.path, dynamicMode: 'static', lfo: null };
 
             const playButton = card.querySelector(`#btn-${sound.name}`);
             const volumeSlider = card.querySelector(`#vol-${sound.name}`);
+            const dynamicSelect = card.querySelector(`#dyn-${sound.name}`);
 
             playButton.addEventListener('click', () => toggleSound(sound.name, playButton, card));
             volumeSlider.addEventListener('input', (e) => handleVolumeChange(sound.name, parseInt(e.target.value)));
+            dynamicSelect.addEventListener('change', (e) => updateSoundDynamics(sound.name, e.target.value));
 
             return card;
         }
