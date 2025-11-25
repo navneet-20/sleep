@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ambient Sound Mixer</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Tone.js for audio control and playback -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+
+    <style>
+        /* Custom scrollbar for aesthetics */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+        /* Custom volume slider styling */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #374151;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            background: #38bdf8; /* Sky Blue */
+            box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+            transition: background 0.2s, transform 0.2s;
+        }
+
+        input[type=range]::-webkit-slider-thumb:hover {
+            background: #0ea5e9;
+            transform: scale(1.1);
+        }
+
+        /* Button styling for play/pause */
+        .sound-button {
+            transition: all 0.2s ease;
+        }
+        .sound-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+        }
+        .sound-card.is-playing {
+            border: 1px solid #38bdf8; /* Highlight playing cards */
+            background-color: #1f2937;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans p-4">
+
+    <!-- Auth Ready State / Placeholder for Firebase -->
+    <div id="auth-info" class="text-xs text-right opacity-50 mb-4 hidden">
+        User: <span id="user-id">Loading...</span>
+    </div>
+
+    <header class="text-center mb-10">
+        <h1 class="text-4xl font-extrabold text-white tracking-tight sm:text-5xl">Ambient Mixer</h1>
+        <p class="mt-2 text-lg text-gray-400">Mix your perfect soundscape for focus or relaxation.</p>
+    </header>
+
+    <div class="flex justify-center mb-8">
+        <button id="start-audio-btn" class="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-lg font-bold shadow-lg transition duration-200">
+            Start Audio
+        </button>
+    </div>
+
+    <!-- Main Sound Grid -->
+    <div id="sound-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 max-w-6xl mx-auto">
+        <!-- Sound cards will be dynamically inserted here -->
+    </div>
+
+    <footer class="mt-12 text-center text-gray-500 text-sm">
+        Built with HTML, Tailwind CSS, and Tone.js.
+    </footer>
+
+    <script type="module">
+        // --- Firebase Setup (Mandatory Boilerplate) ---
+        // This is necessary boilerplate for the environment, even if the app doesn't use the database.
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId = null;
+
+        async function initializeFirebase() {
+            if (!firebaseConfig) {
+                console.warn("Firebase config is missing. Skipping initialization.");
+                return;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                setLogLevel('Debug'); 
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id').textContent = userId;
+                        document.getElementById('auth-info').classList.remove('hidden');
+                    } else {
+                        userId = crypto.randomUUID(); 
+                        document.getElementById('user-id').textContent = 'ANON';
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+            }
+        }
+        initializeFirebase();
+
+        // --- Tone.js and Application Logic ---
+
+        // List of sounds with relative paths to the 'assets' folder
+        const sounds = [
+            { name: "Rain", icon: "🌧️", path: "./assets/rain.mp3" },
+            { name: "Wind", icon: "🌬️", path: "./assets/wind.mp3" },
+            { name: "Storm", icon: "⛈️", path: "./assets/storm.mp3" },
+            { name: "Train", icon: "🚂", path: "./assets/train.mp3" },
+            { name: "Bus", icon: "🚌", path: "./assets/bus.mp3" },
+            { name: "Car", icon: "🚗", path: "./assets/car.mp3" },
+            { name: "Truck", icon: "🚚", path: "./assets/truck.mp3" },
+            { name: "Thunder", icon: "⚡", path: "./assets/thunder.mp3" },
+            { name: "Engine", icon: "⚙️", path: "./assets/engine.mp3" },
+            { name: "Waves", icon: "🌊", path: "./assets/waves.mp3" },
+            { name: "Fan", icon: "💨", path: "./assets/fan.mp3" },
+            { name: "Crows", icon: "🐦‍⬛", path: "./assets/crows.mp3" },
+        ];
+
+        // Storage for active Tone.js sound sources
+        const activeSources = {};
+        let isToneStarted = false;
+
+        const startAudioBtn = document.getElementById('start-audio-btn');
+
+        /**
+         * Initializes Tone.js audio context on user gesture.
+         */
+        async function startAudioContext() {
+            if (!isToneStarted) {
+                try {
+                    await Tone.start();
+                    isToneStarted = true;
+                    startAudioBtn.textContent = 'Audio Active';
+                    startAudioBtn.classList.remove('bg-green-600', 'hover:bg-green-500');
+                    startAudioBtn.classList.add('bg-gray-500', 'cursor-default');
+                    console.log("Tone.js Audio Context started.");
+                } catch (e) {
+                    console.error("Failed to start Tone.js context:", e);
+                }
+            }
+        }
+
+        startAudioBtn.addEventListener('click', startAudioContext);
+
+
+        /**
+         * Initializes Tone.js Player and creates a sound source.
+         */
+        function createToneSource(sound) {
+            // Create a general gain node for volume control (sends output to device speakers)
+            const gain = new Tone.Gain(Tone.dbToGain(-100)).toDestination(); // Start silent
+            gain.nodeName = `${sound.name}Gain`;
+
+            // Tone.Player is used for loading and looping audio files
+            const source = new Tone.Player({
+                url: sound.path, 
+                loop: true,
+                autostart: false,
+                volume: -10 // Base volume for the player
+            }).connect(gain);
+
+            return { source, gain };
+        }
+
+        /**
+         * Converts the UI slider value (0-100) to a decibel (dB) value for Tone.js.
+         */
+        function sliderToDb(value) {
+            if (value === 0) return -100; 
+            // Logarithmic curve: -60dB (1) to 0dB (100)
+            return Math.min(0, Math.max(-60, Math.log10(value / 100) * 20));
+        }
+
+        /**
+         * Handles the click event for the play/pause button.
+         */
+        async function toggleSound(name, button, card) {
+            if (!isToneStarted) {
+                // Attempt to start audio context if not already started
+                await startAudioContext();
+                if (!isToneStarted) return; // Stop if it still failed to start
+            }
+
+            const soundObj = activeSources[name];
+
+            if (soundObj.isPlaying) {
+                // Stop playback
+                soundObj.source.stop(Tone.now());
+                soundObj.isPlaying = false;
+                button.classList.remove('bg-sky-600', 'hover:bg-sky-500');
+                button.classList.add('bg-gray-700', 'hover:bg-gray-600');
+                card.classList.remove('is-playing');
+                button.innerHTML = `<span class="text-xl">▶️</span>`;
+            } else {
+                // Start playback
+                // The sound must be loaded before starting.
+                if (soundObj.source.loaded) {
+                    // Start from the current time
+                    soundObj.source.start(Tone.now());
+                    soundObj.isPlaying = true;
+                    button.classList.remove('bg-gray-700', 'hover:bg-gray-600');
+                    button.classList.add('bg-sky-600', 'hover:bg-sky-500');
+                    card.classList.add('is-playing');
+                    button.innerHTML = `<span class="text-xl">⏸️</span>`;
+                } else {
+                    // Display loading indicator
+                    button.innerHTML = `<span class="text-sm animate-pulse">... Loading</span>`;
+                    button.disabled = true;
+
+                    try {
+                        // Load the file, then start it
+                        await soundObj.source.load(soundObj.path);
+                        
+                        // Start only if user hasn't cancelled the action while loading
+                        if (!soundObj.isPlaying) {
+                            soundObj.source.start(Tone.now());
+                            soundObj.isPlaying = true;
+                            button.classList.remove('bg-gray-700', 'hover:bg-gray-600');
+                            button.classList.add('bg-sky-600', 'hover:bg-sky-500');
+                            card.classList.add('is-playing');
+                            button.innerHTML = `<span class="text-xl">⏸️</span>`;
+                        } else {
+                            button.innerHTML = `<span class="text-xl">⏸️</span>`;
+                        }
+                    } catch (error) {
+                        console.error(`Error loading file for ${name}:`, error);
+                        // Use a simple error message on the button
+                        button.innerHTML = `<span class="text-xl">⚠️</span>`;
+                    }
+                    button.disabled = false;
+                }
+            }
+        }
+
+        /**
+         * Handles the volume slider input event.
+         */
+        function handleVolumeChange(name, value) {
+            const soundObj = activeSources[name];
+            const dbValue = sliderToDb(value);
+            // Set the volume of the associated Gain node
+            soundObj.gain.volume.value = dbValue;
+        }
+
+        /**
+         * Creates the HTML structure for a single sound control card.
+         */
+        function createSoundCard(sound) {
+            const card = document.createElement('div');
+            card.className = "sound-card bg-gray-800 p-4 rounded-xl shadow-lg transition duration-300 ease-in-out hover:shadow-2xl hover:bg-gray-700 flex flex-col";
+
+            // Card content structure
+            card.innerHTML = `
+                <div class="flex items-center justify-between mb-4">
+                    <span class="text-5xl">${sound.icon}</span>
+                    <h2 class="text-xl font-semibold">${sound.name}</h2>
+                </div>
+                <div class="flex items-center space-x-3 mt-auto">
+                    <!-- Play/Pause Button -->
+                    <button id="btn-${sound.name}" class="sound-button w-12 h-12 flex-shrink-0 flex items-center justify-center rounded-full bg-gray-700 text-white transition duration-200 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-opacity-50">
+                        <span class="text-xl">▶️</span>
+                    </button>
+                    <!-- Volume Slider -->
+                    <input type="range" id="vol-${sound.name}" min="0" max="100" value="0" class="flex-grow">
+                </div>
+            `;
+
+            // --- Connect JavaScript Logic ---
+            const { source, gain } = createToneSource(sound);
+            activeSources[sound.name] = { source, gain, isPlaying: false, path: sound.path };
+
+            const playButton = card.querySelector(`#btn-${sound.name}`);
+            const volumeSlider = card.querySelector(`#vol-${sound.name}`);
+
+            playButton.addEventListener('click', () => toggleSound(sound.name, playButton, card));
+            volumeSlider.addEventListener('input', (e) => handleVolumeChange(sound.name, parseInt(e.target.value)));
+
+            return card;
+        }
+
+        /**
+         * Renders all sound cards to the UI.
+         */
+        function renderSoundGrid() {
+            const grid = document.getElementById('sound-grid');
+            sounds.forEach(sound => {
+                grid.appendChild(createSoundCard(sound));
+            });
+        }
+
+        window.onload = function() {
+            renderSoundGrid();
+        };
+
+    </script>
+</body>
+</html>
